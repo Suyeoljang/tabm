@@ -249,8 +249,8 @@ print("=" * 70)
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-3
 BATCH_SIZE = 256
-N_EPOCHS = 300
-PATIENCE = 20
+N_EPOCHS = 1000
+PATIENCE = 100
 
 optimizer = torch.optim.AdamW(model.parameters(), 
                                lr=LEARNING_RATE, 
@@ -260,7 +260,7 @@ share_training_batches = True
 
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 scheduler = ReduceLROnPlateau(optimizer, mode='max', 
-                              factor=0.8, patience=20, 
+                              factor=0.8, patience=25, 
                               min_lr=1e-7)
 
 if device.type == 'cuda':
