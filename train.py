@@ -84,9 +84,9 @@ print("TabM 학습 - 다양한 Loss Function")
 print("=" * 70)
 
 # ================================================================
-# LOSS FUNCTION 선택 (여기서 변경!)
+# LOSS FUNCTION 선택 
 # ================================================================
-LOSS_TYPE = 'huber'  # 'mse', 'mae', 'huber', 'logcosh', 'msle', 'quantile'
+LOSS_TYPE = 'logcosh'  # 'mse', 'mae', 'huber', 'logcosh', 'msle', 'quantile'
 HUBER_DELTA = 1.0    # Huber loss의 delta 파라미터
 QUANTILE = 0.5       # Quantile loss의 quantile 파라미터
 
@@ -107,7 +107,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"디바이스: {device}")
 
 # ================================================================
-# 1. 전처리된 데이터 로드
+# 1. 데이터 로드 (수정된 부분)
 # ================================================================
 print("\n" + "=" * 70)
 print("1. 데이터 로드")
@@ -115,13 +115,20 @@ print("=" * 70)
 
 data_dir = '/mnt/user-data/outputs/'
 
-df = pd.read_csv('encoded_data.csv')
-split_data = np.load('data_split.npz')
+# Train/Val 데이터 로드
+df_trainval = pd.read_csv(f'encoded_trainval_data.csv')
+
+# Test 데이터 로드 (별도 파일)
+df_test = pd.read_csv(f'encoded_test_data.csv')
+
+# 분할 인덱스 로드
+split_data = np.load(f'data_split.npz')
 train_idx = split_data['train_idx']
 val_idx = split_data['val_idx']
-test_idx = split_data['test_idx']
+test_size = split_data['test_size']
 
-with open('preprocessing_metadata.pkl', 'rb') as f:
+# 메타데이터 로드
+with open(f'preprocessing_metadata.pkl', 'rb') as f:
     metadata = pickle.load(f)
 
 label_encoders = metadata['label_encoders']
@@ -132,35 +139,57 @@ target_col = metadata['target_col']
 
 print(f"✓ 데이터 로드 완료")
 print(f"  타겟: {target_col}")
-print(f"  Train/Val/Test: {len(train_idx)}/{len(val_idx)}/{len(test_idx)}")
+print(f"  Train: {len(train_idx):,}개")
+print(f"  Val:   {len(val_idx):,}개")
+print(f"  Test:  {len(df_test):,}개 (별도 파일)")
 
-y = df[target_col].values
-X = df.drop(columns=[target_col])
+# Train/Val 데이터 분리
+y_trainval = df_trainval[target_col].values
+X_trainval = df_trainval.drop(columns=[target_col])
+
+# Test 데이터
+y_test = df_test[target_col].values
+X_test = df_test.drop(columns=[target_col])
 
 # ================================================================
-# 2. numpy 배열 변환
+# 2. numpy 배열 변환 (수정된 부분)
 # ================================================================
 print("\n" + "=" * 70)
 print("2. numpy 배열 변환")
 print("=" * 70)
 
-X_num = X[numerical_cols].values
-X_cat = X[categorical_cols].values
-Y_numpy = y
+# Train/Val에서 numerical, categorical 분리
+X_num_trainval = X_trainval[numerical_cols].values
+X_cat_trainval = X_trainval[categorical_cols].values
+Y_numpy_trainval = y_trainval
+
+# Test에서 numerical, categorical 분리
+X_num_test = X_test[numerical_cols].values
+X_cat_test = X_test[categorical_cols].values
+Y_numpy_test = y_test
 
 data_numpy = {
-    'train': {'x_num': X_num[train_idx].astype(np.float32),
-              'x_cat': X_cat[train_idx].astype(np.int64),
-              'y': Y_numpy[train_idx].astype(np.float32)},
-    'val': {'x_num': X_num[val_idx].astype(np.float32),
-            'x_cat': X_cat[val_idx].astype(np.int64),
-            'y': Y_numpy[val_idx].astype(np.float32)},
-    'test': {'x_num': X_num[test_idx].astype(np.float32),
-             'x_cat': X_cat[test_idx].astype(np.int64),
-             'y': Y_numpy[test_idx].astype(np.float32)}
+    'train': {
+        'x_num': X_num_trainval[train_idx].astype(np.float32),
+        'x_cat': X_cat_trainval[train_idx].astype(np.int64),
+        'y': Y_numpy_trainval[train_idx].astype(np.float32)
+    },
+    'val': {
+        'x_num': X_num_trainval[val_idx].astype(np.float32),
+        'x_cat': X_cat_trainval[val_idx].astype(np.int64),
+        'y': Y_numpy_trainval[val_idx].astype(np.float32)
+    },
+    'test': {
+        'x_num': X_num_test.astype(np.float32),
+        'x_cat': X_cat_test.astype(np.int64),
+        'y': Y_numpy_test.astype(np.float32)
+    }
 }
 
 print("✓ 변환 완료")
+print(f"  Train: x_num {data_numpy['train']['x_num'].shape}, x_cat {data_numpy['train']['x_cat'].shape}")
+print(f"  Val:   x_num {data_numpy['val']['x_num'].shape}, x_cat {data_numpy['val']['x_cat'].shape}")
+print(f"  Test:  x_num {data_numpy['test']['x_num'].shape}, x_cat {data_numpy['test']['x_cat'].shape}")
 
 # ================================================================
 # 3. 데이터 전처리
@@ -199,6 +228,10 @@ data_numpy['train']['y'] = Y_train
 print(f"✓ 전처리 완료")
 print(f"  타겟 mean: {regression_label_stats.mean:.6f}")
 print(f"  타겟 std:  {regression_label_stats.std:.6f}")
+ 
+print("\n" + "=" * 70)
+print("데이터 준비 완료! 이제 학습을 시작할 수 있습니다.")
+print("=" * 70)
 
 # ================================================================
 # 4. PyTorch 텐서 변환
@@ -222,9 +255,9 @@ n_cat_features = len(categorical_cols)
 num_embeddings = rtdl_num_embeddings.PiecewiseLinearEmbeddings(
     rtdl_num_embeddings.compute_bins(
         torch.tensor(data_numpy['train']['x_num'], device='cpu'),
-        n_bins=48
+        n_bins=24
     ),
-    d_embedding=32,
+    d_embedding=24,
     activation=False,
     version='B',
 )
