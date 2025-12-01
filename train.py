@@ -1,6 +1,5 @@
 """
-TabM 학습 - 다양한 Loss Function 지원
-PROC_EXPOSE_LOG 예측에 적합한 loss 찾기
+TabM 학습 - 타겟 표준화 버그 수정 버전
 """
 
 import math
@@ -31,21 +30,6 @@ except ImportError:
 # 커스텀 Loss Functions
 # ================================================================
 
-class HuberLoss(nn.Module):
-    """Huber Loss: MSE + MAE의 장점 결합"""
-    def __init__(self, delta=1.0):
-        super().__init__()
-        self.delta = delta
-    
-    def forward(self, y_pred, y_true):
-        error = y_pred - y_true
-        abs_error = torch.abs(error)
-        quadratic = torch.min(abs_error, torch.tensor(self.delta))
-        linear = abs_error - quadratic
-        loss = 0.5 * quadratic**2 + self.delta * linear
-        return loss.mean()
-
-
 class LogCoshLoss(nn.Module):
     """Log-Cosh Loss: 매끄러운 Huber"""
     def forward(self, y_pred, y_true):
@@ -53,48 +37,23 @@ class LogCoshLoss(nn.Module):
         loss = torch.log(torch.cosh(error))
         return loss.mean()
 
-
-class MSLELoss(nn.Module):
-    """Mean Squared Log Error: 상대 오차 중시"""
-    def forward(self, y_pred, y_true):
-        # log(1+x)를 사용하여 0 값 처리
-        log_pred = torch.log1p(y_pred)
-        log_true = torch.log1p(y_true)
-        loss = (log_pred - log_true) ** 2
-        return loss.mean()
-
-
-class QuantileLoss(nn.Module):
-    """Quantile Loss: 특정 백분위수 예측"""
-    def __init__(self, quantile=0.5):
-        super().__init__()
-        self.quantile = quantile
-    
-    def forward(self, y_pred, y_true):
-        error = y_true - y_pred
-        loss = torch.max(self.quantile * error, (self.quantile - 1) * error)
-        return loss.mean()
-
-
 # ================================================================
 # 설정
 # ================================================================
-print("=" * 70)
-print("TabM 학습 - 다양한 Loss Function")
-print("=" * 70)
+LEARNING_RATE = 2e-3
+WEIGHT_DECAY = 4e-3
+BATCH_SIZE = 512
+N_EPOCHS = 1000
+PATIENCE = 100
+N_BINS = 16
+D_EMBEDDINGS = 16
+DROPOUT = 0.1
+N_BLOCKS = 4  # 현재 4에서 증가
+D_BLOCK = 512
 
-# ================================================================
-# LOSS FUNCTION 선택 
-# ================================================================
-LOSS_TYPE = 'logcosh'  # 'mse', 'mae', 'huber', 'logcosh', 'msle', 'quantile'
-HUBER_DELTA = 1.0    # Huber loss의 delta 파라미터
-QUANTILE = 0.5       # Quantile loss의 quantile 파라미터
-
-print(f"\n선택된 Loss: {LOSS_TYPE.upper()}")
-if LOSS_TYPE == 'huber':
-    print(f"  Huber delta: {HUBER_DELTA}")
-elif LOSS_TYPE == 'quantile':
-    print(f"  Quantile: {QUANTILE}")
+print("=" * 70)
+print("TabM 학습 - 타겟 표준화 버그 수정 버전")
+print("=" * 70)
 
 # 시드 고정
 seed = 42
@@ -107,28 +66,24 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"디바이스: {device}")
 
 # ================================================================
-# 1. 데이터 로드 (수정된 부분)
+# 1. 데이터 로드
 # ================================================================
 print("\n" + "=" * 70)
 print("1. 데이터 로드")
 print("=" * 70)
 
-data_dir = '/mnt/user-data/outputs/'
-
 # Train/Val 데이터 로드
-df_trainval = pd.read_csv(f'encoded_trainval_data.csv')
-
-# Test 데이터 로드 (별도 파일)
-df_test = pd.read_csv(f'encoded_test_data.csv')
+df_trainval = pd.read_csv('encoded_trainval_data.csv')
+df_test = pd.read_csv('encoded_test_data.csv')
 
 # 분할 인덱스 로드
-split_data = np.load(f'data_split.npz')
+split_data = np.load('data_split.npz')
 train_idx = split_data['train_idx']
 val_idx = split_data['val_idx']
 test_size = split_data['test_size']
 
 # 메타데이터 로드
-with open(f'preprocessing_metadata.pkl', 'rb') as f:
+with open('preprocessing_metadata.pkl', 'rb') as f:
     metadata = pickle.load(f)
 
 label_encoders = metadata['label_encoders']
@@ -152,7 +107,7 @@ y_test = df_test[target_col].values
 X_test = df_test.drop(columns=[target_col])
 
 # ================================================================
-# 2. numpy 배열 변환 (수정된 부분)
+# 2. numpy 배열 변환
 # ================================================================
 print("\n" + "=" * 70)
 print("2. numpy 배열 변환")
@@ -210,7 +165,7 @@ preprocessing = sklearn.preprocessing.QuantileTransformer(
 for part in data_numpy:
     data_numpy[part]['x_num'] = preprocessing.transform(data_numpy[part]['x_num'])
 
-# 타겟 표준화
+# 타겟 표준화 (Train, Val, Test 모두!)
 class RegressionLabelStats(NamedTuple):
     mean: float
     std: float
@@ -222,13 +177,21 @@ Y_train = data_numpy['train']['y'].copy()
 regression_label_stats = RegressionLabelStats(
     Y_train.mean().item(), Y_train.std().item()
 )
-Y_train = (Y_train - regression_label_stats.mean) / regression_label_stats.std
-data_numpy['train']['y'] = Y_train
+
+# 🔥 중요: Train, Val, Test 모두 표준화!
+for part in ['train', 'val', 'test']:
+    data_numpy[part]['y'] = (data_numpy[part]['y'] - regression_label_stats.mean) / regression_label_stats.std
 
 print(f"✓ 전처리 완료")
 print(f"  타겟 mean: {regression_label_stats.mean:.6f}")
 print(f"  타겟 std:  {regression_label_stats.std:.6f}")
- 
+
+# 표준화 확인
+print(f"\n✓ 표준화 확인:")
+for part in ['train', 'val', 'test']:
+    y = data_numpy[part]['y']
+    print(f"  {part:5s}: mean={y.mean():7.4f}, std={y.std():7.4f}, min={y.min():7.4f}, max={y.max():7.4f}")
+
 print("\n" + "=" * 70)
 print("데이터 준비 완료! 이제 학습을 시작할 수 있습니다.")
 print("=" * 70)
@@ -255,9 +218,9 @@ n_cat_features = len(categorical_cols)
 num_embeddings = rtdl_num_embeddings.PiecewiseLinearEmbeddings(
     rtdl_num_embeddings.compute_bins(
         torch.tensor(data_numpy['train']['x_num'], device='cpu'),
-        n_bins=24
+        n_bins=N_BINS
     ),
-    d_embedding=24,
+    d_embedding=D_EMBEDDINGS,
     activation=False,
     version='B',
 )
@@ -266,7 +229,10 @@ model = tabm.TabM.make(
     n_num_features=n_num_features,
     cat_cardinalities=cat_cardinalities,
     d_out=1,
+    dropout=DROPOUT,
     num_embeddings=num_embeddings,
+    n_blocks = N_BLOCKS,  # 현재 4에서 증가
+    d_block = D_BLOCK
 ).to(device)
 
 print(f"✓ 모델 생성 완료")
@@ -279,12 +245,6 @@ print("\n" + "=" * 70)
 print("5. 학습 설정")
 print("=" * 70)
 
-LEARNING_RATE = 1e-3
-WEIGHT_DECAY = 1e-3
-BATCH_SIZE = 256
-N_EPOCHS = 1000
-PATIENCE = 100
-
 optimizer = torch.optim.AdamW(model.parameters(), 
                                lr=LEARNING_RATE, 
                                weight_decay=WEIGHT_DECAY)
@@ -293,7 +253,7 @@ share_training_batches = True
 
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 scheduler = ReduceLROnPlateau(optimizer, mode='max', 
-                              factor=0.8, patience=25, 
+                              factor=0.9, patience=40, 
                               min_lr=1e-7)
 
 if device.type == 'cuda':
@@ -307,37 +267,22 @@ if device.type == 'cuda':
 else:
     eval_batch_size = 4096
 
-print(f"✓ 학습 설정:")
+criterion = LogCoshLoss()
+
+print(f"학습 설정:")
 print(f"  Learning rate: {LEARNING_RATE}")
 print(f"  Weight decay: {WEIGHT_DECAY}")
 print(f"  Batch size: {BATCH_SIZE}")
 print(f"  Max epochs: {N_EPOCHS}")
-print(f"  Loss function: {LOSS_TYPE.upper()}")
+print(f"  N_BINS: {N_BINS}")
+print(f"  D_EMBEDDINGS: {D_EMBEDDINGS}")
+print(f"  Dropout: {DROPOUT}")
+print(f"  Loss: LogCosh")
+print(f"  N_BLOCKS: {N_BLOCKS}")
+print(f"  D_BLOCK: {D_BLOCK}")
 
 # ================================================================
-# 7. Loss Function 설정
-# ================================================================
-
-# Loss function 선택
-if LOSS_TYPE == 'mse':
-    criterion = nn.MSELoss()
-elif LOSS_TYPE == 'mae':
-    criterion = nn.L1Loss()
-elif LOSS_TYPE == 'huber':
-    criterion = HuberLoss(delta=HUBER_DELTA)
-elif LOSS_TYPE == 'logcosh':
-    criterion = LogCoshLoss()
-elif LOSS_TYPE == 'msle':
-    criterion = MSLELoss()
-elif LOSS_TYPE == 'quantile':
-    criterion = QuantileLoss(quantile=QUANTILE)
-else:
-    raise ValueError(f"Unknown loss type: {LOSS_TYPE}")
-
-print(f"  Loss object: {criterion}")
-
-# ================================================================
-# 8. 학습 함수
+# 7. 학습 함수
 # ================================================================
 
 def apply_model(part: str, idx: Tensor) -> Tensor:
@@ -359,6 +304,7 @@ def loss_fn(y_pred: Tensor, y_true: Tensor) -> Tensor:
 
 @torch.no_grad()
 def evaluate(part: str) -> float:
+    """표준화된 스케일에서 평가 (역변환 안 함!)"""
     model.eval()
     
     y_pred: np.ndarray = (
@@ -370,24 +316,25 @@ def evaluate(part: str) -> float:
         .numpy()
     )
     
-    y_pred = y_pred * regression_label_stats.std + regression_label_stats.mean
+    # Ensemble mean (k개 모델 평균)
     y_pred = y_pred.mean(1)
     
+    # 표준화된 스케일 그대로 사용!
     y_true = data[part]['y'].cpu().numpy()
     
-    # RMSE 계산 (평가 지표는 항상 RMSE)
+    # RMSE 계산 (표준화된 스케일에서)
     score = -(sklearn.metrics.mean_squared_error(y_true, y_pred) ** 0.5)
     
     return float(score)
 
 # ================================================================
-# 9. 학습 시작
+# 8. 학습 시작
 # ================================================================
 print("\n" + "=" * 70)
 print("6. 학습 시작")
 print("=" * 70)
 
-print(f'\n학습 전 Test RMSE: {-evaluate("test"):.6f}')
+print(f'\n학습 전 Test RMSE (표준화 스케일): {-evaluate("test"):.6f}')
 
 best_val_score = -np.inf
 best_epoch = -1
@@ -445,7 +392,7 @@ for epoch in range(N_EPOCHS):
         break
 
 # ================================================================
-# 10. 최종 평가
+# 9. 최종 평가
 # ================================================================
 print("\n" + "=" * 70)
 print("7. 최종 평가")
@@ -456,15 +403,22 @@ model.load_state_dict(best_state)
 final_val_score = evaluate('val')
 final_test_score = evaluate('test')
 
+# 원래 스케일로 복원해서 출력
+final_val_rmse = -final_val_score * regression_label_stats.std
+final_test_rmse = -final_test_score * regression_label_stats.std
+
 print(f'\nBest epoch: {best_epoch}')
-print(f'Loss function: {LOSS_TYPE.upper()}')
-print(f'Final Validation RMSE: {-final_val_score:.6f}')
-print(f'Final Test RMSE: {-final_test_score:.6f}')
+print(f'표준화 스케일:')
+print(f'  Validation RMSE: {-final_val_score:.6f}')
+print(f'  Test RMSE: {-final_test_score:.6f}')
+print(f'\n원래 스케일:')
+print(f'  Validation RMSE: {final_val_rmse:.6f}')
+print(f'  Test RMSE: {final_test_rmse:.6f}')
 
 # ================================================================
-# 11. 모델 저장
+# 10. 모델 저장
 # ================================================================
-save_path = f'tabm_model_{LOSS_TYPE}.pt'
+save_path = 'tabm_model_fixed.pt'
 torch.save({
     'model_state_dict': best_state,
     'regression_label_stats': regression_label_stats,
@@ -475,11 +429,13 @@ torch.save({
     'cat_cardinalities': cat_cardinalities,
     'best_epoch': best_epoch,
     'best_val_score': best_val_score,
-    'loss_type': LOSS_TYPE,
     'config': {
         'lr': LEARNING_RATE,
         'weight_decay': WEIGHT_DECAY,
         'batch_size': BATCH_SIZE,
+        'n_bins': N_BINS,
+        'd_embeddings': D_EMBEDDINGS,
+        'dropout': DROPOUT,
     }
 }, save_path)
 
