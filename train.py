@@ -44,7 +44,7 @@ LEARNING_RATE = 2e-3
 WEIGHT_DECAY = 4e-3
 BATCH_SIZE = 512
 N_EPOCHS = 1000
-PATIENCE = 100
+PATIENCE = 200
 N_BINS = 16
 D_EMBEDDINGS = 16
 DROPOUT = 0.1
@@ -62,7 +62,7 @@ np.random.seed(seed + 1)
 torch.manual_seed(seed + 2)
 
 # 디바이스 설정
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 print(f"디바이스: {device}")
 
 # ================================================================
