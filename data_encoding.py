@@ -103,19 +103,19 @@ save_dir = '/mnt/user-data/outputs/'
 # Train/Val 데이터
 X_trainval_encoded['PROC_EXPOSE_LOG'] = y_trainval
 X_trainval_encoded.to_csv(f'encoded_trainval_data.csv', index=False)
-print(f"   ✓ Train/Val 데이터: encoded_trainval_data.csv")
+print(f"   ✓ Train/Val 데이터: {save_dir}encoded_trainval_data.csv")
 
 # Test 데이터
 X_test_encoded['PROC_EXPOSE_LOG'] = y_test
 X_test_encoded.to_csv(f'encoded_test_data.csv', index=False)
-print(f"   ✓ Test 데이터: encoded_test_data.csv")
+print(f"   ✓ Test 데이터: {save_dir}encoded_test_data.csv")
 
 # 4-2. 인덱스 저장
 np.savez(f'data_split.npz',
          train_idx=train_idx,
          val_idx=val_idx,
          test_size=len(X_test))
-print(f"   ✓ 분할 인덱스: data_split.npz")
+print(f"   ✓ 분할 인덱스: {save_dir}data_split.npz")
 
 # 4-3. 메타 정보 저장
 metadata = {
@@ -131,7 +131,7 @@ metadata = {
 
 with open(f'preprocessing_metadata.pkl', 'wb') as f:
     pickle.dump(metadata, f)
-print(f"   ✓ 메타데이터: preprocessing_metadata.pkl")
+print(f"   ✓ 메타데이터:preprocessing_metadata.pkl")
 
 # ================================================================
 # 5. 완료
