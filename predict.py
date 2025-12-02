@@ -386,3 +386,97 @@ if __name__ == "__main__":
     
     print(f"\n✅ 성공!")
     print(f"예측 결과: {args.output_csv}")
+
+
+    
+# (tabm) suyeol@node4:~/project/tabm$ python predict.py 
+
+# 설정:
+#   입력 CSV:   testset_1126_analyized.csv
+#   모델 경로:  tabm_model_fixed.pt
+#   출력 CSV:   predictions.csv
+#   배치 크기:  8192
+# ======================================================================
+# TabM 모델 추론
+# ======================================================================
+
+# 디바이스: cuda
+
+# ======================================================================
+# 1. 모델 로드
+# ======================================================================
+# ✓ 모델 로드: tabm_model_fixed.pt
+#   타겟 평균: 4.533395
+#   타겟 표준편차: 1.055436
+#   연속형 변수: 6개
+#   범주형 변수: 14개
+
+# ======================================================================
+# 2. 입력 데이터 로드
+# ======================================================================
+# ✓ 입력 데이터: (24, 108)
+#   파일: testset_1126_analyized.csv
+
+# ======================================================================
+# 3. 데이터 전처리
+# ======================================================================
+
+# 범주형 변수 인코딩 중...
+# ✓ 범주형 인코딩 완료
+# ✓ 전처리 완료
+#   연속형: (24, 6)
+#   범주형: (24, 14)
+
+# ======================================================================
+# 4. 모델 생성
+# ======================================================================
+#   샘플 수: 24
+#   n_bins: 16 (학습 시와 동일하게 고정)
+# ✓ 모델 생성 완료
+#   파라미터: 2,543,648
+
+# ======================================================================
+# 5. 예측 중...
+# ======================================================================
+#   진행: 24/24 (100.0%)
+
+# ✓ 예측 완료!
+#   예측값 범위: [4.505047, 4.837098]
+#   예측값 평균: 4.679574
+#   예측값 표준편차: 0.079472
+
+# ======================================================================
+# 6. 결과 저장
+# ======================================================================
+# ✓ 결과 저장: predictions.csv
+#   컬럼: ['FACILITY', 'LOT_ID', 'PROCESS_ID', 'PROCESS', 'DEV_ID', 'MAT_ID', 'PROC_EQ', 'ROUTE', 'ROUTE_DESC', 'OPN', 'OPN_DESC', 'RETICLE', 'FIRST_EQ', 'FIRST_LAYER', 'FIRST_TRANS_DATE', 'SECOND_EQ', 'SECOND_LAYER', 'SECOND_TRANS_DATE', 'SUB_EQ', 'SUB_LAYER', 'SUB_TRANS_DATE', 'PROC_TRANS_DATE', 'PROC_EXPOSE', 'PROC_FOCUS', 'PROC_MSX', 'PROC_MSY', 'PROC_SCALX', 'PROC_SCALY', 'PROC_ORT', 'PROC_MAG', 'PROC_RR', 'PROC_MAGX', 'PROC_MAGY', 'PROC_SKEW', 'MEAS_CD_TRANS_DATE', 'MEAS_CD_VALID_FLAG', 'MEAS_CD_RESULT_FLAG', 'MEAS_CD_RESULT_MSG', 'MEAS_CD', 'MEAS_CD_SUM', 'MEAS_CD_TOT_PNT_CNT', 'MEAS_CD_CALCULATED_PNT_CNT', 'MEAS_OVERLAY_TRANS_DATE', 'MEAS_OVERLAY_VALID_FLAG', 'MEAS_OVERLAY_RESULT_FLAG', 'MEAS_OVERLAY_RESULT_MSG', 'MEAS_MSX', 'MEAS_MSY', 'MEAS_SCALX', 'MEAS_SCALY', 'MEAS_ORT', 'MEAS_MAG', 'MEAS_RR', 'MEAS_MAGX', 'MEAS_MAGY', 'MEAS_SKEW', 'MEAS_3X', 'MEAS_3Y', 'MEAS_UPDATE_DATE', 'MEAS_UPDATE_USER', 'STEPPER_RECIPE', 'TRACK_RECIPE', 'REWORK_FLAG', 'DEL_FLAG', 'IN_TIME', 'OUT_TIME', 'QRC_2ND_RETICLE_ID', 'MOTHER_LOT_ID', 'OL_MEASURE_UNIT_ID', 'PROC_SA_MAG', 'PROC_SA_ROT', 'MEAS_SA_MAG', 'MEAS_SA_ROT', 'PROC_W_ROT', 'MEAS_W_ROT', 'PHT_UDF_10', 'R_VENDOR', 'R_DENSITY', 'STEP_SIZE_X', 'STEP_SIZE_Y', 'MEA_EQ_CD', 'MEA_EQ_OL', 'CD_TARGET', 'CD_TYPE', 'PR_NAME', 'PR_THK', 'EQ_TYPE', 'EXPOSE_TYPE', 'WAVE_LENGTH', 'MODEL', 'ROUTE_NO', 'CRITICAL_FLAG', 'CD_LOGIC', 'CD_METHOD', 'OL_LOGIC', 'OL_METHOD', 'MAIN_CONSTANT', 'SAMPLE_CONSTANT', 'LSL', 'USL', 'CD_TARGET_LOG', 'STEP_AREA', 'PATTERN_COMP', 'ROUTE_PREFIX', 'RETICLE_SUBFIX', 'RETICLE_PREFIX', 'LENGTH_CTYPE', 'DATE', 'PROC_EXPOSE_LOG_PRED']
+#   행 수: 24
+
+# ======================================================================
+# 7. 예측 요약
+# ======================================================================
+
+# 예측값 통계:
+#   최솟값:   4.505047
+#   최댓값:   4.837098
+#   평균:     4.679574
+#   중앙값:   4.687696
+#   표준편차: 0.079472
+
+# 백분위수:
+#    1%: 4.505379
+#    5%: 4.519770
+#   10%: 4.597242
+#   25%: 4.641559
+#   50%: 4.687696
+#   75%: 4.725299
+#   90%: 4.774200
+#   95%: 4.789669
+#   99%: 4.826592
+
+# ======================================================================
+# 완료!
+# ======================================================================
+
+# ✅ 성공!
+# 예측 결과: predictions.csv
