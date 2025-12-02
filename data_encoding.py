@@ -149,3 +149,58 @@ print(f"  - Train: {len(train_idx):,}개 ({len(train_idx)/len(X_trainval)*100:.1
 print(f"  - Val:   {len(val_idx):,}개 ({len(val_idx)/len(X_trainval)*100:.1f}%)")
 print(f"  - Test:  {len(X_test):,}개 (별도 파일)")
 print("=" * 70)
+
+
+# (tabm) suyeol@node4:~/project/tabm$ python data_encoding.py 
+# ======================================================================
+# 데이터 전처리 및 저장
+# ======================================================================
+
+# 1. 데이터 로드
+#    Train/Val 파일: (416247, 21)
+#    Test 파일: (52905, 21)
+#    연속형 변수: 6개
+#    범주형 변수: 14개
+
+# 2. 데이터 분할 (Train 90% / Val 10%)
+#    Train: 374622 samples (90.0%)
+#    Val:   41625 samples (10.0%)
+#    Test:  52905 samples (별도 파일)
+
+# 3. 범주형 변수 인코딩 (Train 기준)
+#    PR_NAME: 10개 카테고리
+#    WAVE_LENGTH: 3개 카테고리
+#    R_VENDOR: 7개 카테고리
+#    TRACK_RECIPE: 103개 카테고리
+#    ROUTE_DESC: 140개 카테고리
+#    PROC_EQ: 40개 카테고리
+#    DEV_ID: 2897개 카테고리
+#    PROCESS_ID: 76개 카테고리
+#    EXPOSE_TYPE: 4개 카테고리
+#    EQ_TYPE: 4개 카테고리
+#    ROUTE_PREFIX: 352개 카테고리
+#    RETICLE_SUBFIX: 110개 카테고리
+#    RETICLE_PREFIX: 163개 카테고리
+#    LENGTH_CTYPE: 5개 카테고리
+
+# 4. 저장 중...
+#    ✓ Train/Val 데이터: /mnt/user-data/outputs/encoded_trainval_data.csv
+#    ✓ Test 데이터: /mnt/user-data/outputs/encoded_test_data.csv
+#    ✓ 분할 인덱스: /mnt/user-data/outputs/data_split.npz
+#    ✓ 메타데이터:preprocessing_metadata.pkl
+
+# ======================================================================
+# ✅ 전처리 완료!
+# ======================================================================
+
+# 저장된 파일:
+#   1. /mnt/user-data/outputs/encoded_trainval_data.csv  (Train/Val 인코딩 데이터)
+#   2. /mnt/user-data/outputs/encoded_test_data.csv      (Test 인코딩 데이터)
+#   3. /mnt/user-data/outputs/data_split.npz              (분할 인덱스)
+#   4. /mnt/user-data/outputs/preprocessing_metadata.pkl  (메타정보)
+
+# 데이터 구성:
+#   - Train: 374,622개 (90.0%)
+#   - Val:   41,625개 (10.0%)
+#   - Test:  52,905개 (별도 파일)
+# ======================================================================
