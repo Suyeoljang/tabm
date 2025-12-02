@@ -45,11 +45,11 @@ WEIGHT_DECAY = 4e-3
 BATCH_SIZE = 512
 N_EPOCHS = 1000
 PATIENCE = 200
-N_BINS = 16
-D_EMBEDDINGS = 16
+N_BINS = 32
+D_EMBEDDINGS = 32
 DROPOUT = 0.1
 N_BLOCKS = 4  # 현재 4에서 증가
-D_BLOCK = 512
+D_BLOCK = 256
 
 print("=" * 70)
 print("TabM 학습 - 타겟 표준화 버그 수정 버전")
@@ -66,24 +66,28 @@ device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 print(f"디바이스: {device}")
 
 # ================================================================
-# 1. 데이터 로드
+# 1. 데이터 로드 (수정된 부분)
 # ================================================================
 print("\n" + "=" * 70)
 print("1. 데이터 로드")
 print("=" * 70)
 
+data_dir = '/mnt/user-data/outputs/'
+
 # Train/Val 데이터 로드
-df_trainval = pd.read_csv('encoded_trainval_data.csv')
-df_test = pd.read_csv('encoded_test_data.csv')
+df_trainval = pd.read_csv(f'encoded_trainval_data.csv')
+
+# Test 데이터 로드 (별도 파일)
+df_test = pd.read_csv(f'encoded_test_data.csv')
 
 # 분할 인덱스 로드
-split_data = np.load('data_split.npz')
+split_data = np.load(f'data_split.npz')
 train_idx = split_data['train_idx']
 val_idx = split_data['val_idx']
 test_size = split_data['test_size']
 
 # 메타데이터 로드
-with open('preprocessing_metadata.pkl', 'rb') as f:
+with open(f'preprocessing_metadata.pkl', 'rb') as f:
     metadata = pickle.load(f)
 
 label_encoders = metadata['label_encoders']
@@ -107,7 +111,7 @@ y_test = df_test[target_col].values
 X_test = df_test.drop(columns=[target_col])
 
 # ================================================================
-# 2. numpy 배열 변환
+# 2. numpy 배열 변환 (수정된 부분)
 # ================================================================
 print("\n" + "=" * 70)
 print("2. numpy 배열 변환")
@@ -165,7 +169,7 @@ preprocessing = sklearn.preprocessing.QuantileTransformer(
 for part in data_numpy:
     data_numpy[part]['x_num'] = preprocessing.transform(data_numpy[part]['x_num'])
 
-# 타겟 표준화 (Train, Val, Test 모두!)
+# 타겟 표준화
 class RegressionLabelStats(NamedTuple):
     mean: float
     std: float
@@ -177,24 +181,17 @@ Y_train = data_numpy['train']['y'].copy()
 regression_label_stats = RegressionLabelStats(
     Y_train.mean().item(), Y_train.std().item()
 )
-
-# 🔥 중요: Train, Val, Test 모두 표준화!
-for part in ['train', 'val', 'test']:
-    data_numpy[part]['y'] = (data_numpy[part]['y'] - regression_label_stats.mean) / regression_label_stats.std
+Y_train = (Y_train - regression_label_stats.mean) / regression_label_stats.std
+data_numpy['train']['y'] = Y_train
 
 print(f"✓ 전처리 완료")
 print(f"  타겟 mean: {regression_label_stats.mean:.6f}")
 print(f"  타겟 std:  {regression_label_stats.std:.6f}")
 
-# 표준화 확인
-print(f"\n✓ 표준화 확인:")
-for part in ['train', 'val', 'test']:
-    y = data_numpy[part]['y']
-    print(f"  {part:5s}: mean={y.mean():7.4f}, std={y.std():7.4f}, min={y.min():7.4f}, max={y.max():7.4f}")
-
 print("\n" + "=" * 70)
 print("데이터 준비 완료! 이제 학습을 시작할 수 있습니다.")
 print("=" * 70)
+
 
 # ================================================================
 # 4. PyTorch 텐서 변환
@@ -253,7 +250,7 @@ share_training_batches = True
 
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 scheduler = ReduceLROnPlateau(optimizer, mode='max', 
-                              factor=0.9, patience=40, 
+                              factor=0.9, patience=35, 
                               min_lr=1e-7)
 
 if device.type == 'cuda':
@@ -317,6 +314,7 @@ def evaluate(part: str) -> float:
     )
     
     # Ensemble mean (k개 모델 평균)
+    y_pred = y_pred*regression_label_stats.std+regression_label_stats.mean
     y_pred = y_pred.mean(1)
     
     # 표준화된 스케일 그대로 사용!
