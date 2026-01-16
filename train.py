@@ -80,9 +80,9 @@ def main(args):
     # BATCH_SIZE = best_params['batch_size']
 
     LEARNING_RATE = 0.002
-    BATCH_SIZE = 1024
+    BATCH_SIZE = 5632
     K = 32
-    N_BINS = 48
+    N_BINS = 16
     D_EMBEDDINGS = 16
     N_BLOCKS = 2
     D_BLOCK = 512
@@ -224,6 +224,9 @@ def main(args):
         k=K,  # 튜닝된 앙상블 크기
     ).to(device)
     
+    if torch.__version__ >= '2.0.0':
+        model = torch.compile(model)
+        print('torch.compile 활성화!')
     print(f"✓ 모델 생성 완료")
     print(f"  파라미터: {sum(p.numel() for p in model.parameters()):,}")
     
@@ -295,13 +298,15 @@ def main(args):
         
         predictions = torch.cat(predictions)
         
-        # ✨ 수정: optuna_train.py와 동일한 방식
-        # 표준화 스케일에서 RMSE 계산
-        if part == 'train':
-            y_true = data[part]['y']
-        else:
-            # Val/Test는 표준화 필요
-            y_true = (data[part]['y'] - regression_label_stats.mean) / regression_label_stats.std
+        # # ✨ 수정: optuna_train.py와 동일한 방식
+        # # 표준화 스케일에서 RMSE 계산
+        # if part == 'train':
+        #     y_true = data[part]['y']
+        # else:
+        #     # Val/Test는 표준화 필요
+        #     y_true = (data[part]['y'] - regression_label_stats.mean) / regression_label_stats.std
+
+        y_true = data[part]['y']
         
         mse = ((predictions - y_true) ** 2).mean()
         rmse = torch.sqrt(mse)
@@ -314,8 +319,8 @@ def main(args):
     print("\n7. 학습 시작...")
     print("=" * 70)
     
-    max_epochs = 2000
-    patience = 200
+    max_epochs = 1000
+    patience = 100
     best_val_score = float('-inf')
     best_epoch = 0
     patience_counter = 0
@@ -347,6 +352,7 @@ def main(args):
                 y_batch = data['train']['y'][batch_indices]
                 
                 optimizer.zero_grad()
+
                 predictions = model(x_num_batch, x_cat_batch)
                 
                 # 출력 차원 확인 및 처리
@@ -376,7 +382,7 @@ def main(args):
         current_lr = optimizer.param_groups[0]['lr']
         
         # 출력
-        if epoch % 5 == 0 or val_score > best_val_score:
+        if epoch % 1 == 0 or val_score > best_val_score:
             marker = "*" if val_score > best_val_score else " "
             print(f"{marker} [epoch] {epoch:3d} [loss] {mean_loss:.6f} "
                   f"[val] {val_score:.6f} [test] {test_score:.6f} [lr] {current_lr:.6f}")
