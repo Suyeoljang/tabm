@@ -1,206 +1,188 @@
 import numpy as np
 import pandas as pd
 import pickle
-from sklearn.preprocessing import LabelEncoder
-import sklearn.model_selection
+from sklearn.preprocessing import OrdinalEncoder
+import time
+
+# ================================================================
+# 데이터 전처리 및 저장 (최적화 + Val=Test 버전)
+# Train: cd_trainset 전체, Val=Test: cd_testset 동일
+# ================================================================
+print("=" * 70)
+print("데이터 전처리 및 저장 (Val=Test 버전)")
+print("=" * 70)
+
+start_total = time.time()
 
 # ================================================================
 # 1. 데이터 로드
 # ================================================================
-print("=" * 70)
-print("데이터 전처리 및 저장")
-print("=" * 70)
+print("\n1. 데이터 로드")
 
-# 1번 CSV: Train/Validation용
-df_trainval = pd.read_csv('cd_trainset.csv')
-print(f"\n1. 데이터 로드")
-print(f"   Train/Val 파일: {df_trainval.shape}")
+df_trainset = pd.read_csv('cd_trainset.csv')
+print(f"   Trainset 파일: {df_trainset.shape}")
 
-# 2번 CSV: Test용
-df_test = pd.read_csv('cd_testset.csv')  # 실제 테스트 파일명으로 수정 필요
-print(f"   Test 파일: {df_test.shape}")
+df_testset = pd.read_csv('cd_testset.csv')
+print(f"   Testset 파일: {df_testset.shape}")
 
 # 타겟 분리
 target_col = 'PROC_EXPOSE_LOG'
 
-# Train/Val 데이터
-y_trainval = df_trainval[target_col].values
-X_trainval = df_trainval.drop(columns=[target_col])
-
-# Test 데이터
-y_test = df_test[target_col].values
-X_test = df_test.drop(columns=[target_col])
-
-# Feature 타입 분리 (Train/Val 기준)
-numerical_cols = X_trainval.select_dtypes(include=[np.number]).columns.tolist()
-categorical_cols = X_trainval.select_dtypes(include=['object']).columns.tolist()
+# Feature 타입 분리
+numerical_cols = df_trainset.select_dtypes(include=[np.number]).columns.tolist()
+numerical_cols.remove(target_col)  # 타겟 제거
+categorical_cols = df_trainset.select_dtypes(include=['object']).columns.tolist()
 
 print(f"   연속형 변수: {len(numerical_cols)}개")
 print(f"   범주형 변수: {len(categorical_cols)}개")
 
 # ================================================================
-# 2. Train/Val 분할 (90% / 10%)
+# 2. 데이터 분할 전략
 # ================================================================
-print("\n2. 데이터 분할 (Train 90% / Val 10%)")
+print("\n2. 데이터 분할 전략")
+print("   Train: cd_trainset 전체")
+print("   Val:   cd_testset 전체 (Test와 동일)")
+print("   Test:  cd_testset 전체 (Val과 동일)")
 
-seed = 42
-train_size = int(len(X_trainval) * 0.9)
-val_size = len(X_trainval) - train_size
+# Train 인덱스 (trainset 전체)
+train_idx = np.arange(len(df_trainset))
 
-train_idx, val_idx = sklearn.model_selection.train_test_split(
-    np.arange(len(X_trainval)), test_size=0.1, random_state=seed
+# Val/Test 인덱스 (testset 전체, 동일)
+# trainset에는 없지만 나중에 data_numpy에서 testset을 val과 test 둘 다로 사용
+val_idx = np.array([])  # 더미 (실제로는 testset 사용)
+
+print(f"\n   분할 결과:")
+print(f"   - Train: {len(train_idx):,}개 (cd_trainset 전체)")
+if 'DATE' in df_trainset.columns:
+    print(f"     기간: {df_trainset['DATE'].min()} ~ {df_trainset['DATE'].max()}")
+print(f"   - Val:   {len(df_testset):,}개 (cd_testset 전체)")
+print(f"   - Test:  {len(df_testset):,}개 (cd_testset 전체, Val과 동일)")
+if 'DATE' in df_testset.columns:
+    print(f"     기간: {df_testset['DATE'].min()} ~ {df_testset['DATE'].max()}")
+
+# ================================================================
+# 3. 범주형 변수 인코딩 (최적화 버전 - 벡터화)
+# ================================================================
+print("\n3. 범주형 변수 인코딩 (벡터화 방식)")
+start_cat = time.time()
+
+# Train/Test 데이터 준비
+X_trainset = df_trainset.drop(columns=[target_col])
+y_trainset = df_trainset[target_col].values
+
+X_testset = df_testset.drop(columns=[target_col])
+y_testset = df_testset[target_col].values
+
+# 범주형 변수만 추출
+X_trainset_cat = X_trainset[categorical_cols].values.astype(str)
+X_testset_cat = X_testset[categorical_cols].values.astype(str)
+
+# Train set으로만 fit (trainset 전체 사용)
+X_train_cat = X_trainset_cat[train_idx]
+
+# OrdinalEncoder 사용 (벡터화!)
+unknown_value = np.iinfo('int64').max - 3
+encoder = OrdinalEncoder(
+    handle_unknown='use_encoded_value',
+    unknown_value=unknown_value,
+    dtype='int64'
 )
+encoder.fit(X_train_cat)
 
-print(f"   Train: {len(train_idx)} samples ({len(train_idx)/len(X_trainval)*100:.1f}%)")
-print(f"   Val:   {len(val_idx)} samples ({len(val_idx)/len(X_trainval)*100:.1f}%)")
-print(f"   Test:  {len(X_test)} samples (별도 파일)")
+# 전체 데이터 transform
+X_trainset_cat_encoded = encoder.transform(X_trainset_cat)
+X_testset_cat_encoded = encoder.transform(X_testset_cat)
 
-# ================================================================
-# 3. 범주형 변수 인코딩 (Train 기준)
-# ================================================================
-print("\n3. 범주형 변수 인코딩 (Train 기준)")
+# UNKNOWN 재매핑
+max_values = X_trainset_cat_encoded[train_idx].max(axis=0)
 
-label_encoders = {}
+# Trainset에서 UNKNOWN 처리
+for col_idx in range(X_trainset_cat_encoded.shape[1]):
+    mask = X_trainset_cat_encoded[:, col_idx] == unknown_value
+    X_trainset_cat_encoded[mask, col_idx] = max_values[col_idx] + 1
+
+# Testset에서 UNKNOWN 처리
+for col_idx in range(X_testset_cat_encoded.shape[1]):
+    mask = X_testset_cat_encoded[:, col_idx] == unknown_value
+    X_testset_cat_encoded[mask, col_idx] = max_values[col_idx] + 1
+
+# DataFrame에 다시 넣기
+for i, col in enumerate(categorical_cols):
+    X_trainset[col] = X_trainset_cat_encoded[:, i]
+    X_testset[col] = X_testset_cat_encoded[:, i]
+
+# Cardinality 계산
 cat_cardinalities = []
+for col_idx in range(len(categorical_cols)):
+    n_categories = int(max_values[col_idx] + 2)  # +2 for UNKNOWN
+    cat_cardinalities.append(n_categories)
+    print(f"   {categorical_cols[col_idx]}: {n_categories}개 카테고리")
 
-# Train/Val 데이터와 Test 데이터를 하나로 합침 (인코딩을 위해)
-X_combined = pd.concat([X_trainval, X_test], axis=0, ignore_index=True)
-
-for col in categorical_cols:
-    le = LabelEncoder()
-    
-    # Train set으로만 fit
-    X_train_col = X_trainval.iloc[train_idx][col].astype(str)
-    le.fit(X_train_col)
-    
-    # 전체 데이터 transform (Train/Val + Test)
-    def safe_transform(x):
-        try:
-            return le.transform([str(x)])[0]
-        except ValueError:
-            return len(le.classes_)  # UNKNOWN
-    
-    X_combined[col] = X_combined[col].astype(str).apply(safe_transform)
-    
-    label_encoders[col] = le
-    cardinality = len(le.classes_) + 1  # +1 for UNKNOWN
-    cat_cardinalities.append(cardinality)
-    
-    print(f"   {col}: {cardinality}개 카테고리")
-
-# 다시 Train/Val과 Test로 분리
-X_trainval_encoded = X_combined.iloc[:len(X_trainval)].reset_index(drop=True)
-X_test_encoded = X_combined.iloc[len(X_trainval):].reset_index(drop=True)
+elapsed_cat = time.time() - start_cat
+print(f"\n   ✓ 범주형 인코딩 완료 ({elapsed_cat:.2f}초)")
 
 # ================================================================
 # 4. 저장
 # ================================================================
 print("\n4. 저장 중...")
-
-save_dir = '/mnt/user-data/outputs/'
+save_dir = ''
 
 # 4-1. 인코딩된 데이터 저장 (CSV)
-# Train/Val 데이터
-X_trainval_encoded['PROC_EXPOSE_LOG'] = y_trainval
-X_trainval_encoded.to_csv(f'encoded_trainval_data.csv', index=False)
-print(f"   ✓ Train/Val 데이터: {save_dir}encoded_trainval_data.csv")
+# Trainset → encoded_trainval_data.csv (이름은 유지하되 trainset 전체)
+X_trainset['PROC_EXPOSE_LOG'] = y_trainset
+X_trainset.to_csv(f'{save_dir}encoded_train_data.csv', index=False)
+print(f"   ✓ Train 데이터: {save_dir}encoded_train_data.csv")
 
-# Test 데이터
-X_test_encoded['PROC_EXPOSE_LOG'] = y_test
-X_test_encoded.to_csv(f'encoded_test_data.csv', index=False)
-print(f"   ✓ Test 데이터: {save_dir}encoded_test_data.csv")
+# Testset → encoded_test_data.csv (Val과 Test에서 공유)
+X_testset['PROC_EXPOSE_LOG'] = y_testset
+X_testset.to_csv(f'{save_dir}encoded_valtest_data.csv', index=False)
+print(f"   ✓ Val/Test 데이터: {save_dir}encoded_valtest_data.csv")
 
 # 4-2. 인덱스 저장
-np.savez(f'data_split.npz',
+# train_idx: trainset 전체 인덱스
+# val_idx: 빈 배열 (실제로는 testset 전체 사용)
+# test_size: testset 크기
+np.savez(f'{save_dir}data_split.npz',
          train_idx=train_idx,
          val_idx=val_idx,
-         test_size=len(X_test))
+         test_size=len(X_testset))
 print(f"   ✓ 분할 인덱스: {save_dir}data_split.npz")
 
 # 4-3. 메타 정보 저장
 metadata = {
-    'label_encoders': label_encoders,
+    'encoder': encoder,
     'cat_cardinalities': cat_cardinalities,
     'numerical_cols': numerical_cols,
     'categorical_cols': categorical_cols,
     'target_col': target_col,
-    'seed': seed,
-    'trainval_size': len(X_trainval),
-    'test_size': len(X_test)
+    'split_type': 'val_equals_test',  # Val=Test 분할 표시
+    'trainset_size': len(X_trainset),
+    'testset_size': len(X_testset)
 }
 
-with open(f'preprocessing_metadata.pkl', 'wb') as f:
+with open(f'{save_dir}preprocessing_metadata.pkl', 'wb') as f:
     pickle.dump(metadata, f)
-print(f"   ✓ 메타데이터:preprocessing_metadata.pkl")
+print(f"   ✓ 메타데이터: {save_dir}preprocessing_metadata.pkl")
 
 # ================================================================
 # 5. 완료
 # ================================================================
+elapsed_total = time.time() - start_total
+
 print("\n" + "=" * 70)
 print("✅ 전처리 완료!")
 print("=" * 70)
 print(f"\n저장된 파일:")
-print(f"  1. {save_dir}encoded_trainval_data.csv  (Train/Val 인코딩 데이터)")
-print(f"  2. {save_dir}encoded_test_data.csv      (Test 인코딩 데이터)")
-print(f"  3. {save_dir}data_split.npz              (분할 인덱스)")
-print(f"  4. {save_dir}preprocessing_metadata.pkl  (메타정보)")
-print("\n데이터 구성:")
-print(f"  - Train: {len(train_idx):,}개 ({len(train_idx)/len(X_trainval)*100:.1f}%)")
-print(f"  - Val:   {len(val_idx):,}개 ({len(val_idx)/len(X_trainval)*100:.1f}%)")
-print(f"  - Test:  {len(X_test):,}개 (별도 파일)")
+print(f"  1. {save_dir}encoded_trainval_data.csv (Train 데이터)")
+print(f"  2. {save_dir}encoded_test_data.csv (Val/Test 데이터, 동일)")
+print(f"  3. {save_dir}data_split.npz")
+print(f"  4. {save_dir}preprocessing_metadata.pkl")
+print(f"\n데이터 구성:")
+print(f"  - Train: {len(train_idx):,}개 (cd_trainset 전체)")
+print(f"  - Val:   {len(X_testset):,}개 (cd_testset 전체)")
+print(f"  - Test:  {len(X_testset):,}개 (cd_testset 전체, Val과 동일)")
+print(f"\n⏱️  처리 시간:")
+print(f"  - 범주형 인코딩: {elapsed_cat:.2f}초")
+print(f"  - 전체 시간: {elapsed_total:.2f}초")
+print(f"\n✅ Val과 Test가 동일한 unseen 데이터셋 사용!")
 print("=" * 70)
-
-
-# (tabm) suyeol@node4:~/project/tabm$ python data_encoding.py 
-# ======================================================================
-# 데이터 전처리 및 저장
-# ======================================================================
-
-# 1. 데이터 로드
-#    Train/Val 파일: (416247, 21)
-#    Test 파일: (52905, 21)
-#    연속형 변수: 6개
-#    범주형 변수: 14개
-
-# 2. 데이터 분할 (Train 90% / Val 10%)
-#    Train: 374622 samples (90.0%)
-#    Val:   41625 samples (10.0%)
-#    Test:  52905 samples (별도 파일)
-
-# 3. 범주형 변수 인코딩 (Train 기준)
-#    PR_NAME: 10개 카테고리
-#    WAVE_LENGTH: 3개 카테고리
-#    R_VENDOR: 7개 카테고리
-#    TRACK_RECIPE: 103개 카테고리
-#    ROUTE_DESC: 140개 카테고리
-#    PROC_EQ: 40개 카테고리
-#    DEV_ID: 2897개 카테고리
-#    PROCESS_ID: 76개 카테고리
-#    EXPOSE_TYPE: 4개 카테고리
-#    EQ_TYPE: 4개 카테고리
-#    ROUTE_PREFIX: 352개 카테고리
-#    RETICLE_SUBFIX: 110개 카테고리
-#    RETICLE_PREFIX: 163개 카테고리
-#    LENGTH_CTYPE: 5개 카테고리
-
-# 4. 저장 중...
-#    ✓ Train/Val 데이터: /mnt/user-data/outputs/encoded_trainval_data.csv
-#    ✓ Test 데이터: /mnt/user-data/outputs/encoded_test_data.csv
-#    ✓ 분할 인덱스: /mnt/user-data/outputs/data_split.npz
-#    ✓ 메타데이터:preprocessing_metadata.pkl
-
-# ======================================================================
-# ✅ 전처리 완료!
-# ======================================================================
-
-# 저장된 파일:
-#   1. /mnt/user-data/outputs/encoded_trainval_data.csv  (Train/Val 인코딩 데이터)
-#   2. /mnt/user-data/outputs/encoded_test_data.csv      (Test 인코딩 데이터)
-#   3. /mnt/user-data/outputs/data_split.npz              (분할 인덱스)
-#   4. /mnt/user-data/outputs/preprocessing_metadata.pkl  (메타정보)
-
-# 데이터 구성:
-#   - Train: 374,622개 (90.0%)
-#   - Val:   41,625개 (10.0%)
-#   - Test:  52,905개 (별도 파일)
-# ======================================================================
