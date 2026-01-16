@@ -180,8 +180,10 @@ def main(args):
     regression_label_stats = RegressionLabelStats(
         Y_train.mean().item(), Y_train.std().item()
     )
-    Y_train = (Y_train - regression_label_stats.mean) / regression_label_stats.std
-    data_numpy['train']['y'] = Y_train
+    for part in data_numpy:
+        data_numpy[part]['y'] = (
+            data_numpy[part]['y'] - regression_label_stats.mean
+        ) / regression_label_stats.std
     
     print(f"✓ 전처리 완료")
     print(f"  타겟 mean: {regression_label_stats.mean:.6f}")
