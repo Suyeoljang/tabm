@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 import argparse
 
+torch.set_float32_matmul_precision('high')
 
 # RegressionLabelStats를 전역으로 정의 (pickle 가능하도록)
 class RegressionLabelStats(NamedTuple):
@@ -79,15 +80,15 @@ def main(args):
     # DROPOUT = best_params['dropout']
     # BATCH_SIZE = best_params['batch_size']
 
-    LEARNING_RATE = 0.002
+    LEARNING_RATE = 0.0003
     BATCH_SIZE = 5632
-    K = 32
-    N_BINS = 16
-    D_EMBEDDINGS = 16
-    N_BLOCKS = 2
-    D_BLOCK = 512
-    DROPOUT = 0.1
-    WEIGHT_DECAY = 3e-4
+    K = 32 #32
+    N_BINS = 32 #32
+    D_EMBEDDINGS = 16 #16
+    N_BLOCKS = 3 #3
+    D_BLOCK = 256 #256
+    DROPOUT = 0.1 #0.1
+    WEIGHT_DECAY = 3e-3 #3e-3
     
     # ============================================================
     # 2. 데이터 로드
@@ -106,6 +107,12 @@ def main(args):
     split_data = np.load(f'data_split.npz')
     train_idx = split_data['train_idx']
     val_idx = split_data['val_idx']
+
+    # 파라미터 튜닝용 절반만 
+    #half_size = len(df_train) // 2
+    #df_train = df_train.sample(n=half_size, random_state=3)
+    #df_train = df_train.iloc[:half_size].reset_index(drop=True)
+    #print(f"⚠️  학습 데이터 50% 사용: {len(df_train):,}개")
     
     with open(f'preprocessing_metadata.pkl', 'rb') as f:
         metadata = pickle.load(f)
@@ -177,14 +184,30 @@ def main(args):
     
     # 타겟 표준화 (Train만)
     Y_train = data_numpy['train']['y'].copy()
+    ##############
+    Y_val = data_numpy['val']['y'].copy()
+    Y_all = np.concatenate([Y_train, Y_val])
     regression_label_stats = RegressionLabelStats(
-        Y_train.mean().item(), Y_train.std().item()
+        Y_all.mean().item(), Y_all.std().item()
     )
+    #####################
+    # regression_label_stats = RegressionLabelStats(
+    #     Y_train.mean().item(), Y_train.std().item()
+    # )
+
+    print(f'\n표준화 통계량(train+val전체):')
+    print(f"Mean: {regression_label_stats.mean:.6f}")
+    print(f"Std: {regression_label_stats.std:.6f}")
+
     for part in data_numpy:
         data_numpy[part]['y'] = (
             data_numpy[part]['y'] - regression_label_stats.mean
         ) / regression_label_stats.std
     
+    print(f"\n표준화 후:")
+    print(f"  Train: mean={data_numpy['train']['y'].mean():.4f}, std={data_numpy['train']['y'].std():.4f}")
+    print(f"  Val:   mean={data_numpy['val']['y'].mean():.4f}, std={data_numpy['val']['y'].std():.4f}")
+
     print(f"✓ 전처리 완료")
     print(f"  타겟 mean: {regression_label_stats.mean:.6f}")
     print(f"  타겟 std:  {regression_label_stats.std:.6f}")
@@ -246,7 +269,7 @@ def main(args):
         optimizer,
         mode='max',
         factor=0.9,
-        patience=30,
+        patience=10,
     )
     
     # LogCosh Loss
@@ -307,11 +330,12 @@ def main(args):
         #     y_true = (data[part]['y'] - regression_label_stats.mean) / regression_label_stats.std
 
         y_true = data[part]['y']
-        
+    
         mse = ((predictions - y_true) ** 2).mean()
         rmse = torch.sqrt(mse)
         
         return -rmse.item()  # 음수로 반환 (최대화 -> 최소화)
+    
     
     # ============================================================
     # 8. 학습 루프
@@ -319,7 +343,7 @@ def main(args):
     print("\n7. 학습 시작...")
     print("=" * 70)
     
-    max_epochs = 1000
+    max_epochs = 100
     patience = 100
     best_val_score = float('-inf')
     best_epoch = 0
