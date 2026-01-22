@@ -1,492 +1,116 @@
+  Learning rate: 0.0001
+  Weight decay: 0.004
+  Batch size: 256
+  K (ensemble size): 32
+  N_BINS: 16
+  D_EMBEDDINGS: 16
+  N_BLOCKS: 3
+  D_BLOCK: 128
+  Dropout: 0.15
+  Loss: LogCosh
 
-import numpy as np
-import pandas as pd
-import torch
-import torch.nn as nn
-import sklearn.preprocessing
-import sklearn.model_selection
-import tabm
-import rtdl_num_embeddings
-import pickle
-from typing import NamedTuple, Literal
-from tqdm import tqdm
-import json
-from pathlib import Path
-import argparse
+7. 학습 시작...
+======================================================================
+학습 전 Validation RMSE (원래 스케일): 1.056482
+학습 전 Test RMSE (원래 스케일): 1.056482
 
-torch.set_float32_matmul_precision('high')
-
-# RegressionLabelStats를 전역으로 정의 (pickle 가능하도록)
-class RegressionLabelStats(NamedTuple):
-    mean: float
-    std: float
-
-
-# def load_best_params(study_name: str = None) -> dict:
-#     """
-#     Optuna 결과에서 best parameters 로드
-    
-#     Args:
-#         study_name: Study 이름 (None이면 가장 최신 파일 사용)
-    
-#     Returns:
-#         best parameters dict
-#     """
-#     results_dir = Path("optuna_results")
-    
-#     if study_name is None:
-#         # 가장 최신 파일 찾기
-#         json_files = list(results_dir.glob("*_best_params.json"))
-#         if not json_files:
-#             raise FileNotFoundError("optuna_results/에 best_params.json 파일이 없습니다.")
-        
-#         latest_file = max(json_files, key=lambda p: p.stat().st_mtime)
-#         print(f"✓ 가장 최신 파일 사용: {latest_file.name}")
-#     else:
-#         latest_file = results_dir / f"{study_name}_best_params.json"
-#         if not latest_file.exists():
-#             raise FileNotFoundError(f"{latest_file}이 존재하지 않습니다.")
-    
-#     with open(latest_file, 'r') as f:
-#         result = json.load(f)
-    
-#     return result['best_params']
-
-
-def main(args):
-    # print("=" * 70)
-    # print("최적 하이퍼파라미터로 최종 모델 학습")
-    # print("=" * 70)
-    
-    # # ============================================================
-    # # 1. 최적 하이퍼파라미터 로드
-    # # ============================================================
-    # print("\n1. 최적 하이퍼파라미터 로드 중...")
-    
-    # best_params = load_best_params(args.study_name)
-    
-    # print("\n최적 하이퍼파라미터:")
-    # for key, value in best_params.items():
-    #     print(f"  {key}: {value}")
-    
-    # # 파라미터 추출
-    # LEARNING_RATE = best_params['learning_rate']
-    # WEIGHT_DECAY = best_params['weight_decay']
-    # N_BLOCKS = best_params['n_blocks']
-    # D_BLOCK = best_params['d_block']
-    # K = best_params['k']  # ✨ 앙상블 크기
-    # N_BINS = best_params['n_bins']
-    # D_EMBEDDINGS = best_params['d_embedding']
-    # DROPOUT = best_params['dropout']
-    # BATCH_SIZE = best_params['batch_size']
-
-    LEARNING_RATE = 0.0003
-    BATCH_SIZE = 5632
-    K = 32 #32
-    N_BINS = 32 #32
-    D_EMBEDDINGS = 16 #16
-    N_BLOCKS = 3 #3
-    D_BLOCK = 256 #256
-    DROPOUT = 0.1 #0.1
-    WEIGHT_DECAY = 3e-3 #3e-3
-    
-    # ============================================================
-    # 2. 데이터 로드
-    # ============================================================
-    print("\n2. 데이터 로드 중...")
-    
-    device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
-    print(f"디바이스: {device}")
-    
-    save_dir = '/mnt/user-data/outputs/'
-    
-    # ✨ 수정: optuna_train.py와 동일한 방식으로 로드
-    df_train = pd.read_csv(f'encoded_train_data.csv')
-    df_valtest = pd.read_csv(f'encoded_valtest_data.csv')
-    
-    split_data = np.load(f'data_split.npz')
-    train_idx = split_data['train_idx']
-    val_idx = split_data['val_idx']
-
-    # 파라미터 튜닝용 절반만 
-    #half_size = len(df_train) // 2
-    #df_train = df_train.sample(n=half_size, random_state=3)
-    #df_train = df_train.iloc[:half_size].reset_index(drop=True)
-    #print(f"⚠️  학습 데이터 50% 사용: {len(df_train):,}개")
-    
-    with open(f'preprocessing_metadata.pkl', 'rb') as f:
-        metadata = pickle.load(f)
-    
-    numerical_cols = metadata['numerical_cols']
-    categorical_cols = metadata['categorical_cols']
-    cat_cardinalities = metadata['cat_cardinalities']
-    
-    print(f"✓ 데이터 로드 완료")
-    print(f"  Train: {len(train_idx):,}개 (100%)")
-    print(f"  Val:   {len(df_valtest):,}개 (testset과 동일)")
-    print(f"  Test:  {len(df_valtest):,}개 (testset과 동일)")
-    
-    # ============================================================
-    # 3. NumPy 배열 변환
-    # ============================================================
-    print("\n3. NumPy 배열 변환 중...")
-    
-    target_col = 'PROC_EXPOSE_LOG'
-    
-    # ✨ 수정: train은 전체 train 데이터, val/test는 valtest 데이터
-    X_train = df_train[numerical_cols + categorical_cols].values
-    y_train = df_train[target_col].values
-    
-    X_valtest = df_valtest[numerical_cols + categorical_cols].values
-    y_valtest = df_valtest[target_col].values
-    
-    n_num = len(numerical_cols)
-    
-    data_numpy = {
-        'train': {
-            'x_num': X_train[:, :n_num].astype(np.float32),
-            'x_cat': X_train[:, n_num:].astype(np.int64),
-            'y': y_train.astype(np.float32)
-        },
-        'val': {
-            'x_num': X_valtest[:, :n_num].astype(np.float32),
-            'x_cat': X_valtest[:, n_num:].astype(np.int64),
-            'y': y_valtest.astype(np.float32)
-        },
-        'test': {
-            'x_num': X_valtest[:, :n_num].astype(np.float32),
-            'x_cat': X_valtest[:, n_num:].astype(np.int64),
-            'y': y_valtest.astype(np.float32)
-        }
-    }
-    
-    print(f"✓ 변환 완료")
-    print(f"  Train shape: {data_numpy['train']['x_num'].shape}")
-    print(f"  Val shape: {data_numpy['val']['x_num'].shape}")
-    print(f"  Test shape: {data_numpy['test']['x_num'].shape}")
-    
-    # ============================================================
-    # 4. 데이터 전처리
-    # ============================================================
-    print("\n4. 데이터 전처리 중...")
-    
-    x_num_train = data_numpy['train']['x_num']
-    noise = np.random.default_rng(0).normal(0.0, 1e-5, x_num_train.shape).astype(x_num_train.dtype)
-    
-    preprocessing = sklearn.preprocessing.QuantileTransformer(
-        n_quantiles=max(min(len(X_train) // 30, 1000), 10),  # ✨ 수정: len(train_idx) -> len(X_train)
-        output_distribution='normal',
-        subsample=10**9,
-    ).fit(x_num_train + noise)
-    
-    for part in data_numpy:
-        data_numpy[part]['x_num'] = preprocessing.transform(data_numpy[part]['x_num'])
-    
-    # 타겟 표준화 (Train만)
-    Y_train = data_numpy['train']['y'].copy()
-    ##############
-    Y_val = data_numpy['val']['y'].copy()
-    Y_all = np.concatenate([Y_train, Y_val])
-    regression_label_stats = RegressionLabelStats(
-        Y_all.mean().item(), Y_all.std().item()
-    )
-    #####################
-    # regression_label_stats = RegressionLabelStats(
-    #     Y_train.mean().item(), Y_train.std().item()
-    # )
-
-    print(f'\n표준화 통계량(train+val전체):')
-    print(f"Mean: {regression_label_stats.mean:.6f}")
-    print(f"Std: {regression_label_stats.std:.6f}")
-
-    for part in data_numpy:
-        data_numpy[part]['y'] = (
-            data_numpy[part]['y'] - regression_label_stats.mean
-        ) / regression_label_stats.std
-    
-    print(f"\n표준화 후:")
-    print(f"  Train: mean={data_numpy['train']['y'].mean():.4f}, std={data_numpy['train']['y'].std():.4f}")
-    print(f"  Val:   mean={data_numpy['val']['y'].mean():.4f}, std={data_numpy['val']['y'].std():.4f}")
-
-    print(f"✓ 전처리 완료")
-    print(f"  타겟 mean: {regression_label_stats.mean:.6f}")
-    print(f"  타겟 std:  {regression_label_stats.std:.6f}")
-    
-    # PyTorch 텐서 변환
-    data = {
-        part: {key: torch.tensor(value, device=device) 
-               for key, value in part_data.items()}
-        for part, part_data in data_numpy.items()
-    }
-    
-    # ============================================================
-    # 5. 모델 생성
-    # ============================================================
-    print("\n5. TabM 모델 생성 중...")
-    
-    bin_edges = rtdl_num_embeddings.compute_bins(
-        torch.tensor(data_numpy['train']['x_num'], device='cpu'),
-        n_bins=N_BINS
-    )
-    
-    num_embeddings = rtdl_num_embeddings.PiecewiseLinearEmbeddings(
-        bin_edges,
-        d_embedding=D_EMBEDDINGS,
-        activation=False,
-        version='B',
-    )
-    
-    model = tabm.TabM.make(
-        n_num_features=len(numerical_cols),
-        cat_cardinalities=cat_cardinalities,
-        d_out=1,
-        dropout=DROPOUT, #DROPOUT,
-        num_embeddings=num_embeddings,
-        n_blocks=N_BLOCKS,
-        d_block=D_BLOCK,
-        k=K,  # 튜닝된 앙상블 크기
-    ).to(device)
-    
-    if torch.__version__ >= '2.0.0':
-        model = torch.compile(model)
-        print('torch.compile 활성화!')
-    print(f"✓ 모델 생성 완료")
-    print(f"  파라미터: {sum(p.numel() for p in model.parameters()):,}")
-    
-    # ============================================================
-    # 6. 학습 설정
-    # ============================================================
-    print("\n6. 학습 설정...")
-
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=LEARNING_RATE,
-        weight_decay= WEIGHT_DECAY #WEIGHT_DECAY
-    )
-    
-    # Learning rate scheduler
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode='max',
-        factor=0.9,
-        patience=10,
-    )
-    
-    # LogCosh Loss
-    def logcosh_loss(y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
-        diff = y_pred - y_true
-        return torch.mean(torch.log(torch.cosh(diff + 1e-12)))
-    
-    loss_fn = logcosh_loss
-    
-    print(f"학습 설정:")
-    print(f"  Learning rate: {LEARNING_RATE}")
-    print(f"  Weight decay: {WEIGHT_DECAY}")
-    print(f"  Batch size: {BATCH_SIZE}")
-    print(f"  K (ensemble size): {K}")
-    print(f"  N_BINS: {N_BINS}")
-    print(f"  D_EMBEDDINGS: {D_EMBEDDINGS}")
-    print(f"  N_BLOCKS: {N_BLOCKS}")
-    print(f"  D_BLOCK: {D_BLOCK}")
-    print(f"  Dropout: {DROPOUT}")
-    print(f"  Loss: LogCosh")
-    
-    # ============================================================
-    # 7. 평가 함수
-    # ============================================================
-    @torch.no_grad()
-    def evaluate(part: str) -> float:
-        """모델 평가 (RMSE 반환, 음수)"""
-        model.eval()
-        predictions = []
-        
-        for batch in torch.utils.data.DataLoader(
-            torch.utils.data.TensorDataset(
-                data[part]['x_num'], 
-                data[part]['x_cat']
-            ),
-            batch_size=1024,
-            shuffle=False
-        ):
-            x_num_batch, x_cat_batch = batch
-            pred = model(x_num_batch, x_cat_batch)
-            
-            # 출력 차원 확인 및 처리
-            if pred.dim() == 2:
-                pred = pred.squeeze(-1)  # [batch_size, 1] -> [batch_size]
-            elif pred.dim() == 3:
-                pred = pred.mean(dim=1).squeeze(-1)  # [batch_size, k, 1] -> [batch_size]
-            
-            predictions.append(pred)
-        
-        predictions = torch.cat(predictions)
-        
-        # # ✨ 수정: optuna_train.py와 동일한 방식
-        # # 표준화 스케일에서 RMSE 계산
-        # if part == 'train':
-        #     y_true = data[part]['y']
-        # else:
-        #     # Val/Test는 표준화 필요
-        #     y_true = (data[part]['y'] - regression_label_stats.mean) / regression_label_stats.std
-
-        y_true = data[part]['y']
-    
-        mse = ((predictions - y_true) ** 2).mean()
-        rmse = torch.sqrt(mse)
-        
-        return -rmse.item()  # 음수로 반환 (최대화 -> 최소화)
-    
-    
-    # ============================================================
-    # 8. 학습 루프
-    # ============================================================
-    print("\n7. 학습 시작...")
-    print("=" * 70)
-    
-    max_epochs = 100
-    patience = 100
-    best_val_score = float('-inf')
-    best_epoch = 0
-    patience_counter = 0
-    best_state = None
-    
-    # 초기 평가
-    initial_val_score = evaluate('val')
-    initial_test_score = evaluate('test')
-    initial_val_rmse = -initial_val_score * regression_label_stats.std
-    initial_test_rmse = -initial_test_score * regression_label_stats.std
-    
-    print(f"학습 전 Validation RMSE (원래 스케일): {initial_val_rmse:.6f}")
-    print(f"학습 전 Test RMSE (원래 스케일): {initial_test_rmse:.6f}")
-    print()
-    
-    for epoch in range(max_epochs):
-        model.train()
-        epoch_losses = []
-        
-        # 배치 학습
-        indices = torch.randperm(len(data['train']['y']), device=device)
-        
-        with tqdm(total=len(indices), desc=f'Epoch {epoch}', leave=False) as pbar:
-            for i in range(0, len(indices), BATCH_SIZE):
-                batch_indices = indices[i:i + BATCH_SIZE]
-                
-                x_num_batch = data['train']['x_num'][batch_indices]
-                x_cat_batch = data['train']['x_cat'][batch_indices]
-                y_batch = data['train']['y'][batch_indices]
-                
-                optimizer.zero_grad()
-
-                predictions = model(x_num_batch, x_cat_batch)
-                
-                # 출력 차원 확인 및 처리
-                if predictions.dim() == 2:
-                    predictions = predictions.squeeze(-1)  # [batch_size, 1] -> [batch_size]
-                elif predictions.dim() == 3:
-                    predictions = predictions.mean(dim=1).squeeze(-1)  # [batch_size, k, 1] -> [batch_size]
-                
-                loss = loss_fn(predictions, y_batch)
-                loss.backward()
-                
-                # Gradient clipping
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                
-                optimizer.step()
-                epoch_losses.append(loss.item())
-                
-                pbar.update(len(batch_indices))
-        
-        # Epoch 평가
-        mean_loss = np.mean(epoch_losses)
-        val_score = evaluate('val')
-        test_score = evaluate('test')
-        
-        # Scheduler step
-        scheduler.step(val_score)
-        current_lr = optimizer.param_groups[0]['lr']
-        
-        # 출력
-        if epoch % 1 == 0 or val_score > best_val_score:
-            marker = "*" if val_score > best_val_score else " "
-            print(f"{marker} [epoch] {epoch:3d} [loss] {mean_loss:.6f} "
-                  f"[val] {val_score:.6f} [test] {test_score:.6f} [lr] {current_lr:.6f}")
-        
-        # Best 모델 저장
-        if val_score > best_val_score:
-            best_val_score = val_score
-            best_epoch = epoch
-            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-            patience_counter = 0
-        else:
-            patience_counter += 1
-        
-        # Early stopping
-        if patience_counter >= patience:
-            print(f"\nEarly stopping at epoch {epoch}")
-            break
-    
-    # ============================================================
-    # 9. 최종 평가
-    # ============================================================
-    print("\n" + "=" * 70)
-    print("8. 최종 평가")
-    print("=" * 70)
-    
-    model.load_state_dict(best_state)
-    
-    final_val_score = evaluate('val')
-    final_test_score = evaluate('test')
-    
-    # 원래 스케일로 복원
-    final_val_rmse = -final_val_score * regression_label_stats.std
-    final_test_rmse = -final_test_score * regression_label_stats.std
-    
-    print(f'\nBest epoch: {best_epoch}')
-    print(f'표준화 스케일:')
-    print(f'  Validation RMSE: {-final_val_score:.6f}')
-    print(f'  Test RMSE: {-final_test_score:.6f}')
-    print(f'\n원래 스케일:')
-    print(f'  Validation RMSE: {final_val_rmse:.6f}')
-    print(f'  Test RMSE: {final_test_rmse:.6f}')
-    
-    # ============================================================
-    # 10. 모델 저장
-    # ============================================================
-    save_path = 'tabm_model_optimized.pt'
-    torch.save({
-        'model_state_dict': best_state,
-        'regression_label_stats': regression_label_stats,
-        'preprocessing': preprocessing,
-        'numerical_cols': numerical_cols,
-        'categorical_cols': categorical_cols,
-        'cat_cardinalities': cat_cardinalities,
-        'best_epoch': best_epoch,
-        'best_val_score': best_val_score,
-        'final_val_rmse': final_val_rmse,
-        'final_test_rmse': final_test_rmse,
-        'bin_edges': bin_edges,  # 추가: inference에 필요
-        'config': {
-            'lr': LEARNING_RATE,
-            'weight_decay': WEIGHT_DECAY,
-            'batch_size': BATCH_SIZE,
-            'k': K,
-            'n_bins': N_BINS,
-            'd_embeddings': D_EMBEDDINGS,
-            'dropout': DROPOUT,
-            'n_blocks': N_BLOCKS,
-            'd_block': D_BLOCK,
-        },
-        'best_params': 'None'
-    }, save_path)
-    
-    print(f"\n✓ 모델 저장: {save_path}")
-    print("=" * 70)
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Train with best hyperparameters')
-    # parser.add_argument('--study_name', type=str, default=None,
-    #                     help='tabm_tuning_20251211_104848')
-    
-    args = parser.parse_args()
-    main(args)
+* [epoch]   0 [loss] 0.080505 [val] -0.062232 [test] -0.062232 [lr] 0.000100                                                                                                                                       
+* [epoch]   1 [loss] 0.001935 [val] -0.043924 [test] -0.043924 [lr] 0.000100                                                                                                                                       
+* [epoch]   2 [loss] 0.001300 [val] -0.037803 [test] -0.037803 [lr] 0.000100                                                                                                                                       
+* [epoch]   3 [loss] 0.001015 [val] -0.037110 [test] -0.037110 [lr] 0.000100                                                                                                                                       
+* [epoch]   4 [loss] 0.000870 [val] -0.036761 [test] -0.036761 [lr] 0.000100                                                                                                                                       
+* [epoch]   5 [loss] 0.000771 [val] -0.032453 [test] -0.032453 [lr] 0.000100                                                                                                                                       
+* [epoch]   6 [loss] 0.000705 [val] -0.031190 [test] -0.031190 [lr] 0.000100                                                                                                                                       
+* [epoch]   7 [loss] 0.000654 [val] -0.030945 [test] -0.030945 [lr] 0.000100                                                                                                                                       
+  [epoch]   8 [loss] 0.000615 [val] -0.031215 [test] -0.031215 [lr] 0.000100                                                                                                                                       
+  [epoch]   9 [loss] 0.000576 [val] -0.031535 [test] -0.031535 [lr] 0.000100                                                                                                                                       
+* [epoch]  10 [loss] 0.000542 [val] -0.030211 [test] -0.030211 [lr] 0.000100                                                                                                                                       
+* [epoch]  11 [loss] 0.000519 [val] -0.029485 [test] -0.029485 [lr] 0.000100                                                                                                                                       
+  [epoch]  12 [loss] 0.000494 [val] -0.030040 [test] -0.030040 [lr] 0.000100                                                                                                                                       
+  [epoch]  13 [loss] 0.000471 [val] -0.029691 [test] -0.029691 [lr] 0.000100                                                                                                                                       
+  [epoch]  14 [loss] 0.000455 [val] -0.029836 [test] -0.029836 [lr] 0.000100                                                                                                                                       
+  [epoch]  15 [loss] 0.000436 [val] -0.029489 [test] -0.029489 [lr] 0.000100                                                                                                                                       
+* [epoch]  16 [loss] 0.000420 [val] -0.029169 [test] -0.029169 [lr] 0.000100                                                                                                                                       
+  [epoch]  17 [loss] 0.000406 [val] -0.029695 [test] -0.029695 [lr] 0.000100                                                                                                                                       
+  [epoch]  18 [loss] 0.000393 [val] -0.029944 [test] -0.029944 [lr] 0.000100                                                                                                                                       
+* [epoch]  19 [loss] 0.000379 [val] -0.029125 [test] -0.029125 [lr] 0.000100                                                                                                                                       
+* [epoch]  20 [loss] 0.000368 [val] -0.028691 [test] -0.028691 [lr] 0.000100                                                                                                                                       
+  [epoch]  21 [loss] 0.000356 [val] -0.029309 [test] -0.029309 [lr] 0.000100                                                                                                                                       
+  [epoch]  22 [loss] 0.000347 [val] -0.028841 [test] -0.028841 [lr] 0.000100                                                                                                                                       
+  [epoch]  23 [loss] 0.000336 [val] -0.029086 [test] -0.029086 [lr] 0.000100                                                                                                                                       
+  [epoch]  24 [loss] 0.000327 [val] -0.029777 [test] -0.029777 [lr] 0.000100                                                                                                                                       
+  [epoch]  25 [loss] 0.000321 [val] -0.029689 [test] -0.029689 [lr] 0.000100                                                                                                                                       
+  [epoch]  26 [loss] 0.000314 [val] -0.029076 [test] -0.029076 [lr] 0.000100                                                                                                                                       
+  [epoch]  27 [loss] 0.000305 [val] -0.029026 [test] -0.029026 [lr] 0.000100                                                                                                                                       
+  [epoch]  28 [loss] 0.000298 [val] -0.030078 [test] -0.030078 [lr] 0.000100                                                                                                                                       
+  [epoch]  29 [loss] 0.000291 [val] -0.029429 [test] -0.029429 [lr] 0.000100                                                                                                                                       
+  [epoch]  30 [loss] 0.000284 [val] -0.029492 [test] -0.029492 [lr] 0.000100                                                                                                                                       
+  [epoch]  31 [loss] 0.000278 [val] -0.029119 [test] -0.029119 [lr] 0.000090                                                                                                                                       
+  [epoch]  32 [loss] 0.000271 [val] -0.029862 [test] -0.029862 [lr] 0.000090                                                                                                                                       
+  [epoch]  33 [loss] 0.000265 [val] -0.029482 [test] -0.029482 [lr] 0.000090                                                                                                                                       
+  [epoch]  34 [loss] 0.000263 [val] -0.031067 [test] -0.031067 [lr] 0.000090                                                                                                                                       
+  [epoch]  35 [loss] 0.000258 [val] -0.031607 [test] -0.031607 [lr] 0.000090                                                                                                                                       
+  [epoch]  36 [loss] 0.000252 [val] -0.031716 [test] -0.031716 [lr] 0.000090                                                                                                                                       
+  [epoch]  37 [loss] 0.000249 [val] -0.030921 [test] -0.030921 [lr] 0.000090                                                                                                                                       
+  [epoch]  38 [loss] 0.000246 [val] -0.031738 [test] -0.031738 [lr] 0.000090                                                                                                                                       
+  [epoch]  39 [loss] 0.000242 [val] -0.031954 [test] -0.031954 [lr] 0.000090                                                                                                                                       
+  [epoch]  40 [loss] 0.000239 [val] -0.030892 [test] -0.030892 [lr] 0.000090                                                                                                                                       
+  [epoch]  41 [loss] 0.000236 [val] -0.031636 [test] -0.031636 [lr] 0.000090                                                                                                                                       
+  [epoch]  42 [loss] 0.000233 [val] -0.033276 [test] -0.033276 [lr] 0.000081                                                                                                                                       
+  [epoch]  43 [loss] 0.000226 [val] -0.034351 [test] -0.034351 [lr] 0.000081                                                                                                                                       
+  [epoch]  44 [loss] 0.000224 [val] -0.032847 [test] -0.032847 [lr] 0.000081                                                                                                                                       
+  [epoch]  45 [loss] 0.000221 [val] -0.035275 [test] -0.035275 [lr] 0.000081                                                                                                                                       
+  [epoch]  46 [loss] 0.000218 [val] -0.034086 [test] -0.034086 [lr] 0.000081                                                                                                                                       
+  [epoch]  47 [loss] 0.000217 [val] -0.033472 [test] -0.033472 [lr] 0.000081                                                                                                                                       
+  [epoch]  48 [loss] 0.000215 [val] -0.034604 [test] -0.034604 [lr] 0.000081                                                                                                                                       
+  [epoch]  49 [loss] 0.000211 [val] -0.037438 [test] -0.037438 [lr] 0.000081                                                                                                                                       
+  [epoch]  50 [loss] 0.000209 [val] -0.037731 [test] -0.037731 [lr] 0.000081                                                                                                                                       
+  [epoch]  51 [loss] 0.000207 [val] -0.037354 [test] -0.037354 [lr] 0.000081                                                                                                                                       
+  [epoch]  52 [loss] 0.000206 [val] -0.038978 [test] -0.038978 [lr] 0.000081                                                                                                                                       
+  [epoch]  53 [loss] 0.000204 [val] -0.038749 [test] -0.038749 [lr] 0.000073                                                                                                                                       
+  [epoch]  54 [loss] 0.000200 [val] -0.041885 [test] -0.041885 [lr] 0.000073                                                                                                                                       
+  [epoch]  55 [loss] 0.000197 [val] -0.041916 [test] -0.041916 [lr] 0.000073                                                                                                                                       
+  [epoch]  56 [loss] 0.000194 [val] -0.041017 [test] -0.041017 [lr] 0.000073                                                                                                                                       
+  [epoch]  57 [loss] 0.000193 [val] -0.040062 [test] -0.040062 [lr] 0.000073                                                                                                                                       
+  [epoch]  58 [loss] 0.000191 [val] -0.039178 [test] -0.039178 [lr] 0.000073                                                                                                                                       
+  [epoch]  59 [loss] 0.000189 [val] -0.044165 [test] -0.044165 [lr] 0.000073                                                                                                                                       
+  [epoch]  60 [loss] 0.000188 [val] -0.046425 [test] -0.046425 [lr] 0.000073                                                                                                                                       
+  [epoch]  61 [loss] 0.000189 [val] -0.043395 [test] -0.043395 [lr] 0.000073                                                                                                                                       
+  [epoch]  62 [loss] 0.000185 [val] -0.042704 [test] -0.042704 [lr] 0.000073                                                                                                                                       
+  [epoch]  63 [loss] 0.000185 [val] -0.043882 [test] -0.043882 [lr] 0.000073                                                                                                                                       
+  [epoch]  64 [loss] 0.000184 [val] -0.046047 [test] -0.046047 [lr] 0.000066                                                                                                                                       
+  [epoch]  65 [loss] 0.000180 [val] -0.045656 [test] -0.045656 [lr] 0.000066                                                                                                                                       
+  [epoch]  66 [loss] 0.000179 [val] -0.046771 [test] -0.046771 [lr] 0.000066                                                                                                                                       
+  [epoch]  67 [loss] 0.000177 [val] -0.046905 [test] -0.046905 [lr] 0.000066                                                                                                                                       
+  [epoch]  68 [loss] 0.000175 [val] -0.045706 [test] -0.045706 [lr] 0.000066                                                                                                                                       
+  [epoch]  69 [loss] 0.000174 [val] -0.048990 [test] -0.048990 [lr] 0.000066                                                                                                                                       
+  [epoch]  70 [loss] 0.000173 [val] -0.050402 [test] -0.050402 [lr] 0.000066                                                                                                                                       
+  [epoch]  71 [loss] 0.000171 [val] -0.049691 [test] -0.049691 [lr] 0.000066                                                                                                                                       
+  [epoch]  72 [loss] 0.000171 [val] -0.052078 [test] -0.052078 [lr] 0.000066                                                                                                                                       
+  [epoch]  73 [loss] 0.000170 [val] -0.048561 [test] -0.048561 [lr] 0.000066                                                                                                                                       
+  [epoch]  74 [loss] 0.000169 [val] -0.054609 [test] -0.054609 [lr] 0.000066                                                                                                                                       
+  [epoch]  75 [loss] 0.000167 [val] -0.048469 [test] -0.048469 [lr] 0.000059                                                                                                                                       
+  [epoch]  76 [loss] 0.000166 [val] -0.053648 [test] -0.053648 [lr] 0.000059                                                                                                                                       
+  [epoch]  77 [loss] 0.000164 [val] -0.055004 [test] -0.055004 [lr] 0.000059                                                                                                                                       
+  [epoch]  78 [loss] 0.000163 [val] -0.053133 [test] -0.053133 [lr] 0.000059                                                                                                                                       
+  [epoch]  79 [loss] 0.000162 [val] -0.057505 [test] -0.057505 [lr] 0.000059                                                                                                                                       
+  [epoch]  80 [loss] 0.000161 [val] -0.054757 [test] -0.054757 [lr] 0.000059                                                                                                                                       
+  [epoch]  81 [loss] 0.000162 [val] -0.052648 [test] -0.052648 [lr] 0.000059                                                                                                                                       
+  [epoch]  82 [loss] 0.000160 [val] -0.056325 [test] -0.056325 [lr] 0.000059                                                                                                                                       
+  [epoch]  83 [loss] 0.000159 [val] -0.058635 [test] -0.058635 [lr] 0.000059                                                                                                                                       
+  [epoch]  84 [loss] 0.000158 [val] -0.056905 [test] -0.056905 [lr] 0.000059                                                                                                                                       
+  [epoch]  85 [loss] 0.000157 [val] -0.058741 [test] -0.058741 [lr] 0.000059                                                                                                                                       
+  [epoch]  86 [loss] 0.000156 [val] -0.061944 [test] -0.061944 [lr] 0.000053                                                                                                                                       
+  [epoch]  87 [loss] 0.000154 [val] -0.060723 [test] -0.060723 [lr] 0.000053                                                                                                                                       
+  [epoch]  88 [loss] 0.000153 [val] -0.057432 [test] -0.057432 [lr] 0.000053                                                                                                                                       
+  [epoch]  89 [loss] 0.000153 [val] -0.058648 [test] -0.058648 [lr] 0.000053                                                                                                                                       
+  [epoch]  90 [loss] 0.000152 [val] -0.062635 [test] -0.062635 [lr] 0.000053                                                                                                                                       
+  [epoch]  91 [loss] 0.000151 [val] -0.063463 [test] -0.063463 [lr] 0.000053                                                                                                                                       
+  [epoch]  92 [loss] 0.000151 [val] -0.063856 [test] -0.063856 [lr] 0.000053                                                                                                                                       
+  [epoch]  93 [loss] 0.000150 [val] -0.059230 [test] -0.059230 [lr] 0.000053                                                                                                                                       
+  [epoch]  94 [loss] 0.000150 [val] -0.064334 [test] -0.064334 [lr] 0.000053                                                                                                                                       
+  [epoch]  95 [loss] 0.000149 [val] -0.065119 [test] -0.065119 [lr] 0.000053                                                                                                                                       
+  [epoch]  96 [loss] 0.000148 [val] -0.061396 [test] -0.061396 [lr] 0.000053                                                                                                                                       
+  [epoch]  97 [loss] 0.000147 [val] -0.066134 [test] -0.066134 [lr] 0.000048                                                                                                                                       
+  [epoch]  98 [loss] 0.000146 [val] -0.066325 [test] -0.066325 [lr] 0.000048                                                                                                                                       
+  [epoch]  99 [loss] 0.000145 [val] -0.066617 [test] -0.066617 [lr] 0.000048  
